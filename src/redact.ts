@@ -84,6 +84,88 @@ function replaceWhole(
   return text.replace(pattern, (match) => placeholder(kind, match, findings, salt));
 }
 
+function privateKeyLabel(line: string): string | undefined {
+  const prefix = "-----BEGIN ";
+  const suffix = "-----";
+  if (!line.startsWith(prefix) || !line.endsWith(suffix)) {
+    return undefined;
+  }
+
+  const label = line.slice(prefix.length, -suffix.length);
+  if (label.length > 64) {
+    return undefined;
+  }
+  const words = label.split(" ");
+  if (
+    words.length < 2 ||
+    words.length > 6 ||
+    words.at(-2) !== "PRIVATE" ||
+    words.at(-1) !== "KEY"
+  ) {
+    return undefined;
+  }
+  for (const word of words) {
+    if (!word) {
+      return undefined;
+    }
+    for (const character of word) {
+      const code = character.charCodeAt(0);
+      const isUppercaseLetter = code >= 65 && code <= 90;
+      const isDigit = code >= 48 && code <= 57;
+      if (!isUppercaseLetter && !isDigit) {
+        return undefined;
+      }
+    }
+  }
+  return label;
+}
+
+function redactPrivateKeyBlocks(
+  input: string,
+  findings: RedactionFinding[],
+  salt: string,
+): string {
+  let output = "";
+  let outputCursor = 0;
+  let lineStart = 0;
+  let openBlock: { label: string; start: number } | undefined;
+
+  while (lineStart <= input.length) {
+    let lineEnd = lineStart;
+    while (
+      lineEnd < input.length &&
+      input[lineEnd] !== "\n" &&
+      input[lineEnd] !== "\r"
+    ) {
+      lineEnd += 1;
+    }
+    let separatorLength = 0;
+    if (lineEnd < input.length) {
+      separatorLength =
+        input[lineEnd] === "\r" && input[lineEnd + 1] === "\n" ? 2 : 1;
+    }
+
+    const line = input.slice(lineStart, lineEnd);
+    const label = privateKeyLabel(line);
+    if (label !== undefined) {
+      openBlock = { label, start: lineStart };
+    } else if (openBlock && line === `-----END ${openBlock.label}-----`) {
+      const block = input.slice(openBlock.start, lineEnd);
+      output += input.slice(outputCursor, openBlock.start);
+      output += placeholder("PRIVATE_KEY", block, findings, salt);
+      outputCursor = lineEnd;
+      openBlock = undefined;
+    }
+
+    if (separatorLength === 0) {
+      break;
+    }
+    lineStart = lineEnd + separatorLength;
+  }
+
+  return output + input.slice(outputCursor);
+}
+
 export function countFindings(findings: RedactionFinding[]): RedactionCounts {
   const counts: RedactionCounts = {};
 
@@ -115,13 +197,7 @@ export function redactText(
   const salt = options.fingerprintSalt ?? randomBytes(32).toString("hex");
   let text = input;
 
-  text = replaceWhole(
-    text,
-    /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/g,
-    "PRIVATE_KEY",
-    findings,
-    salt,
-  );
+  text = redactPrivateKeyBlocks(text, findings, salt);
 
   text = text.replace(
     /(\bauthorization\s*:\s*)([^\r\n]+)/gi,

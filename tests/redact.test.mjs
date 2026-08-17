@@ -63,6 +63,26 @@ test("redacts multi-word private key labels", () => {
   assert.doesNotMatch(result.text, /c3ludGhldGlj/);
 });
 
+test("pairs private key boundaries without regex backtracking", () => {
+  const unmatchedHeaders = "-----BEGIN PRIVATE KEY-----\r\n".repeat(2_000);
+  const input = [
+    unmatchedHeaders,
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "mismatched-footer-must-remain",
+    "-----END EC PRIVATE KEY-----",
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "c3ludGhldGljLW9wZW5zc2gta2V5",
+    "-----END OPENSSH PRIVATE KEY-----",
+  ].join("\n");
+
+  const result = redactText(input, { fingerprintSalt: "linear-private-key" });
+  const counts = countFindings(result.findings);
+
+  assert.equal(counts.PRIVATE_KEY, 1);
+  assert.match(result.text, /mismatched-footer-must-remain/);
+  assert.doesNotMatch(result.text, /c3ludGhldGljLW9wZW5zc2g/);
+});
+
 test("does not flag common empty-value sentinels", () => {
   const input = "token=null\npassword=false\nsecret=redacted\napi_key=undefined";
   const result = redactText(input, { fingerprintSalt: "sentinels" });

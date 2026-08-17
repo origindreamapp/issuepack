@@ -9,6 +9,10 @@ All notable changes to IssuePack will be documented here.
 - Cross-platform package smoke testing for tarball creation, isolated installation, CLI execution, and sanitized bundle verification.
 - CodeQL analysis for JavaScript and TypeScript changes, main-branch pushes, and weekly scheduled scans.
 
+### Fixed
+
+- Replaced the private-key block regular expression with a linear boundary scanner to prevent polynomial backtracking on hostile input.
+
 ## [0.2.0] - 2026-08-17
 
 ### Added
