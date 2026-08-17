@@ -1,6 +1,6 @@
 {
   "name": "issuepack-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Create privacy-safe diagnostic bundles for GitHub issues and coding agents.",
   "type": "module",
   "sideEffects": false,
