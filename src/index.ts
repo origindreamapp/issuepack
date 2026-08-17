@@ -2,6 +2,7 @@ export {
   createBundle,
   scanPath,
   type BundleManifest,
+  type BundleOptions,
   type BundleResult,
   type ScanReport,
 } from "./bundle.js";

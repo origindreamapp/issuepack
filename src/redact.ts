@@ -1,19 +1,24 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 
 export type RedactionKind =
+  | "ANTHROPIC_API_KEY"
   | "AWS_ACCESS_KEY"
   | "BEARER_TOKEN"
   | "CREDENTIAL"
   | "EMAIL"
+  | "GITLAB_TOKEN"
   | "GITHUB_TOKEN"
   | "GOOGLE_API_KEY"
+  | "HUGGINGFACE_TOKEN"
   | "IP_ADDRESS"
   | "JWT"
   | "MAC_ADDRESS"
+  | "NPM_TOKEN"
   | "OPENAI_API_KEY"
   | "PATH_USER"
   | "PRIVATE_KEY"
   | "SESSION_HEADER"
+  | "SENDGRID_API_KEY"
   | "SLACK_TOKEN"
   | "URL_CREDENTIALS";
 
@@ -34,14 +39,21 @@ export interface RedactionOptions {
 export type RedactionCounts = Partial<Record<RedactionKind, number>>;
 
 const REDACTED_PREFIX = "[REDACTED:";
+const NON_SECRET_SENTINELS = new Set([
+  "",
+  "false",
+  "none",
+  "null",
+  "redacted",
+  "true",
+  "undefined",
+]);
 
-function fingerprint(value: string, salt: string): string {
-  return createHash("sha256")
-    .update(salt)
-    .update("\0")
+export function fingerprintValue(value: string, salt: string): string {
+  return createHmac("sha256", salt)
     .update(value)
     .digest("hex")
-    .slice(0, 10);
+    .slice(0, 12);
 }
 
 function placeholder(
@@ -53,8 +65,11 @@ function placeholder(
   if (value.includes(REDACTED_PREFIX)) {
     return value;
   }
+  if (NON_SECRET_SENTINELS.has(value.trim().toLowerCase())) {
+    return value;
+  }
 
-  const digest = fingerprint(value, salt);
+  const digest = fingerprintValue(value, salt);
   findings.push({ kind, fingerprint: digest });
   return `[REDACTED:${kind}:${digest}]`;
 }
@@ -102,7 +117,7 @@ export function redactText(
 
   text = replaceWhole(
     text,
-    /-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)? PRIVATE KEY-----/g,
+    /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/g,
     "PRIVATE_KEY",
     findings,
     salt,
@@ -126,6 +141,13 @@ export function redactText(
 
   text = replaceWhole(
     text,
+    /\bsk-ant-(?:api\d{2}-)?[A-Za-z0-9_-]{20,}\b/g,
+    "ANTHROPIC_API_KEY",
+    findings,
+    salt,
+  );
+  text = replaceWhole(
+    text,
     /\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{16,}\b/g,
     "OPENAI_API_KEY",
     findings,
@@ -140,6 +162,13 @@ export function redactText(
   );
   text = replaceWhole(
     text,
+    /\bglpat-[A-Za-z0-9_-]{20,}\b/g,
+    "GITLAB_TOKEN",
+    findings,
+    salt,
+  );
+  text = replaceWhole(
+    text,
     /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
     "AWS_ACCESS_KEY",
     findings,
@@ -149,6 +178,27 @@ export function redactText(
     text,
     /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
     "SLACK_TOKEN",
+    findings,
+    salt,
+  );
+  text = replaceWhole(
+    text,
+    /\bhf_[A-Za-z0-9]{20,}\b/g,
+    "HUGGINGFACE_TOKEN",
+    findings,
+    salt,
+  );
+  text = replaceWhole(
+    text,
+    /\bnpm_[A-Za-z0-9]{20,}\b/g,
+    "NPM_TOKEN",
+    findings,
+    salt,
+  );
+  text = replaceWhole(
+    text,
+    /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b/g,
+    "SENDGRID_API_KEY",
     findings,
     salt,
   );
@@ -174,7 +224,7 @@ export function redactText(
   );
 
   const credentialNames =
-    "api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|client[_-]?secret";
+    "api[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?token|token|password|passwd|secret|client[_-]?secret|aws[_-]?secret[_-]?access[_-]?key|account[_-]?key|connection[_-]?string";
   const quotedCredential = new RegExp(
     `((?:["']?)(?:${credentialNames})(?:["']?)\\s*[:=]\\s*)(["'])([^\\r\\n]*?)\\2`,
     "gi",

@@ -10,7 +10,7 @@ Create privacy-safe diagnostic bundles without modifying source files.
 
 Usage:
   issuepack scan <path> [--json]
-  issuepack bundle <path> [--out <directory>] [--json]
+  issuepack bundle <path> [--out <directory>] [--anonymize-paths] [--json]
   issuepack --help
   issuepack --version
 
@@ -27,11 +27,12 @@ Exit codes:
 interface ParsedOptions {
   input?: string;
   outputDir?: string;
+  anonymizePaths: boolean;
   json: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
-  const options: ParsedOptions = { json: false };
+  const options: ParsedOptions = { anonymizePaths: false, json: false };
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -40,6 +41,10 @@ function parseOptions(args: string[]): ParsedOptions {
     }
     if (argument === "--json") {
       options.json = true;
+      continue;
+    }
+    if (argument === "--anonymize-paths") {
+      options.anonymizePaths = true;
       continue;
     }
     if (argument === "--out" || argument === "-o") {
@@ -82,6 +87,9 @@ async function main(): Promise<void> {
     console.log(VERSION);
     return;
   }
+  if (command !== "scan" && command !== "bundle") {
+    throw new Error(`Unknown command: ${command}`);
+  }
 
   const options = parseOptions(args);
   if (!options.input) {
@@ -91,6 +99,9 @@ async function main(): Promise<void> {
   if (command === "scan") {
     if (options.outputDir) {
       throw new Error("--out is only valid with the bundle command.");
+    }
+    if (options.anonymizePaths) {
+      throw new Error("--anonymize-paths is only valid with the bundle command.");
     }
     const report = await scanPath(options.input);
     const total = countTotal(report.redactions);
@@ -102,6 +113,14 @@ async function main(): Promise<void> {
       console.log(`Potential sensitive values: ${total}.`);
       for (const [kind, count] of Object.entries(report.redactions).sort()) {
         console.log(`  ${kind}: ${count}`);
+      }
+      for (const file of report.files.filter(
+        (entry) => countTotal(entry.redactions) > 0,
+      )) {
+        console.log(`  ${file.path}`);
+        for (const [kind, count] of Object.entries(file.redactions).sort()) {
+          console.log(`    ${kind}: ${count}`);
+        }
       }
       if (report.skipped.length) {
         console.log(`Skipped entries: ${report.skipped.length}.`);
@@ -117,11 +136,16 @@ async function main(): Promise<void> {
   if (command === "bundle") {
     const result = await createBundle(options.input, {
       ...(options.outputDir ? { outputDir: options.outputDir } : {}),
+      anonymizePaths: options.anonymizePaths,
     });
     if (options.json) {
       console.log(
         JSON.stringify(
-          { outputPath: result.outputPath, totals: result.manifest.totals },
+          {
+            outputPath: result.outputPath,
+            pathPolicy: result.manifest.pathPolicy,
+            totals: result.manifest.totals,
+          },
           null,
           2,
         ),
@@ -129,13 +153,17 @@ async function main(): Promise<void> {
     } else {
       console.log(`Bundle created: ${result.outputPath}`);
       console.log(`Files written: ${result.manifest.totals.filesWritten}`);
-      console.log(`Redactions: ${countTotal(result.manifest.totals.redactions)}`);
+      console.log(
+        `Content redactions: ${countTotal(result.manifest.totals.redactions)}`,
+      );
+      console.log(
+        `Path redactions: ${countTotal(result.manifest.totals.pathRedactions)}`,
+      );
+      console.log(`Path mode: ${result.manifest.pathPolicy.mode}`);
       console.log("Review REPORT.md and every output file before sharing.");
     }
     return;
   }
-
-  throw new Error(`Unknown command: ${command}`);
 }
 
 main().catch((error: unknown) => {

@@ -1,8 +1,11 @@
 {
   "name": "issuepack-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Create privacy-safe diagnostic bundles for GitHub issues and coding agents.",
   "type": "module",
+  "sideEffects": false,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "issuepack": "dist/cli.js"
   },
@@ -14,6 +17,7 @@
   },
   "files": [
     "dist",
+    "docs",
     "README.md",
     "LICENSE",
     "SECURITY.md",
@@ -36,6 +40,14 @@
     "redaction",
     "support-bundle"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/origindreamapp/issuepack.git"
+  },
+  "bugs": {
+    "url": "https://github.com/origindreamapp/issuepack/issues"
+  },
+  "homepage": "https://github.com/origindreamapp/issuepack#readme",
   "license": "MIT",
   "author": "IssuePack contributors",
   "publishConfig": {
