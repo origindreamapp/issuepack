@@ -7,6 +7,7 @@ All notable changes to IssuePack will be documented here.
 ### Added
 
 - Cross-platform package smoke testing for tarball creation, isolated installation, CLI execution, and sanitized bundle verification.
+- CodeQL analysis for JavaScript and TypeScript changes, main-branch pushes, and weekly scheduled scans.
 
 ## [0.2.0] - 2026-08-17
 
