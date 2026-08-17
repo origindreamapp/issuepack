@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, type Dirent } from "node:fs";
 import { randomBytes } from "node:crypto";
 import {
   access,
@@ -23,6 +23,7 @@ import { NAME, VERSION } from "./version.js";
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_FILE_COUNT = 5_000;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
+const BUNDLE_MANIFEST_PROBE_BYTES = 64 * 1024;
 const IGNORED_DIRECTORIES = new Set([".git", "node_modules", "dist", "coverage"]);
 const INCOMPLETE_MARKER = ".issuepack-incomplete";
 
@@ -114,6 +115,52 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+async function isGeneratedIssuePackBundle(
+  directory: string,
+  entries: Dirent[],
+): Promise<boolean> {
+  const hasManifest = entries.some(
+    (entry) => entry.name === "manifest.json" && entry.isFile(),
+  );
+  const hasReport = entries.some(
+    (entry) => entry.name === "REPORT.md" && entry.isFile(),
+  );
+  const hasFilesDirectory = entries.some(
+    (entry) => entry.name === "files" && entry.isDirectory(),
+  );
+  if (!hasManifest || !hasReport || !hasFilesDirectory) {
+    return false;
+  }
+
+  const noFollowFlag = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  let handle;
+  try {
+    handle = await open(
+      join(directory, "manifest.json"),
+      constants.O_RDONLY | noFollowFlag,
+    );
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      return false;
+    }
+
+    const buffer = Buffer.alloc(
+      Math.min(stats.size, BUNDLE_MANIFEST_PROBE_BYTES),
+    );
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const manifestPrefix = decodeText(buffer.subarray(0, bytesRead));
+    return (
+      manifestPrefix !== undefined &&
+      /"schemaVersion"\s*:\s*2\b/.test(manifestPrefix) &&
+      /"tool"\s*:\s*\{\s*"name"\s*:\s*"IssuePack"/s.test(manifestPrefix)
+    );
+  } catch {
+    return false;
+  } finally {
+    await handle?.close();
+  }
+}
+
 async function collectInput(inputPath: string): Promise<CollectionResult> {
   const inputStats = await lstat(inputPath);
   const paths: CollectedPath[] = [];
@@ -142,6 +189,17 @@ async function collectInput(inputPath: string): Promise<CollectionResult> {
     }
     const entries = await readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
+
+    if (
+      directory !== inputPath &&
+      (await isGeneratedIssuePackBundle(directory, entries))
+    ) {
+      skipped.push({
+        path: `${portablePath(relative(inputPath, directory))}/`,
+        reason: "generated IssuePack bundle",
+      });
+      return;
+    }
 
     for (const entry of entries) {
       if (paths.length >= MAX_FILE_COUNT) {
