@@ -1,0 +1,48 @@
+{
+  "name": "issuepack-cli",
+  "version": "0.1.0",
+  "description": "Create privacy-safe diagnostic bundles for GitHub issues and coding agents.",
+  "type": "module",
+  "bin": {
+    "issuepack": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/redact.test.mjs tests/bundle.test.mjs tests/cli.test.mjs",
+    "check": "npm run lint && npm test",
+    "prepublishOnly": "npm run check"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "diagnostics",
+    "github-issues",
+    "privacy",
+    "redaction",
+    "support-bundle"
+  ],
+  "license": "MIT",
+  "author": "IssuePack contributors",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
