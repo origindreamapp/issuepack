@@ -23,10 +23,52 @@ test("redacts common credentials without exposing the original values", () => {
 
 test("uses stable placeholders so repeated values remain correlatable", () => {
   const result = redactText("email=user@example.com\nowner=user@example.com");
-  const placeholders = result.text.match(/\[REDACTED:EMAIL:[a-f0-9]{10}\]/g);
+  const placeholders = result.text.match(/\[REDACTED:EMAIL:[a-f0-9]{12}\]/g);
 
   assert.equal(placeholders?.length, 2);
   assert.equal(placeholders?.[0], placeholders?.[1]);
+});
+
+test("classifies common provider tokens without exposing them", () => {
+  const input = [
+    "anthropic=sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456",
+    "gitlab=glpat-abcdefghijklmnopqrstuvwxyz123456",
+    "huggingface=hf_abcdefghijklmnopqrstuvwxyz123456",
+    "npm=npm_abcdefghijklmnopqrstuvwxyz123456",
+    "sendgrid=SG.abcdefghijklmnop.qrstuvwxyzABCDEFGH",
+  ].join("\n");
+
+  const result = redactText(input, { fingerprintSalt: "providers" });
+  const counts = countFindings(result.findings);
+
+  assert.equal(counts.ANTHROPIC_API_KEY, 1);
+  assert.equal(counts.GITLAB_TOKEN, 1);
+  assert.equal(counts.HUGGINGFACE_TOKEN, 1);
+  assert.equal(counts.NPM_TOKEN, 1);
+  assert.equal(counts.SENDGRID_API_KEY, 1);
+  assert.equal(counts.OPENAI_API_KEY, undefined);
+  assert.doesNotMatch(result.text, /sk-ant-|glpat-|hf_|npm_|SG\./);
+});
+
+test("redacts multi-word private key labels", () => {
+  const input = [
+    "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+    "c3ludGhldGljLWtleS1tYXRlcmlhbA==",
+    "-----END ENCRYPTED PRIVATE KEY-----",
+  ].join("\n");
+
+  const result = redactText(input, { fingerprintSalt: "private-key" });
+
+  assert.match(result.text, /\[REDACTED:PRIVATE_KEY:[a-f0-9]{12}\]/);
+  assert.doesNotMatch(result.text, /c3ludGhldGlj/);
+});
+
+test("does not flag common empty-value sentinels", () => {
+  const input = "token=null\npassword=false\nsecret=redacted\napi_key=undefined";
+  const result = redactText(input, { fingerprintSalt: "sentinels" });
+
+  assert.equal(result.text, input);
+  assert.deepEqual(result.findings, []);
 });
 
 test("uses different fingerprints for different bundle salts", () => {

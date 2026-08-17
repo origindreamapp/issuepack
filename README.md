@@ -1,5 +1,9 @@
 # IssuePack
 
+[![CI](https://github.com/origindreamapp/issuepack/actions/workflows/ci.yml/badge.svg)](https://github.com/origindreamapp/issuepack/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/origindreamapp/issuepack)](https://github.com/origindreamapp/issuepack/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 IssuePack creates privacy-safe diagnostic bundles for GitHub issues, support requests, and coding agents. It runs locally, never modifies source files, and has zero runtime dependencies.
 
 > IssuePack uses best-effort pattern matching. Always review a generated bundle before sharing it.
@@ -18,18 +22,21 @@ This preserves correlation across files without including the original value.
 
 ## Install
 
-IssuePack requires Node.js 20 or newer. The npm package has not been released yet; the command below will apply after the first release.
+IssuePack requires Node.js 20 or newer. The npm package has not been published yet. Until it is available, install from source:
 
 ```bash
-npm install --global issuepack-cli
+git clone https://github.com/origindreamapp/issuepack.git
+cd issuepack
+npm ci
+npm run build
+npm link
 ```
 
-During local development:
+Then verify the CLI:
 
 ```bash
-npm install
-npm run build
-node dist/cli.js --help
+issuepack --version
+issuepack --help
 ```
 
 ## Usage
@@ -48,6 +55,12 @@ Create a sanitized bundle directory:
 issuepack bundle ./diagnostics --out ./issuepack-output
 ```
 
+Known sensitive patterns in file and directory names are redacted by default. For the strongest path privacy, replace every path segment with a salted fingerprint while retaining safe file extensions:
+
+```bash
+issuepack bundle ./diagnostics --out ./issuepack-output --anonymize-paths
+```
+
 Machine-readable output is available with `--json`:
 
 ```bash
@@ -55,20 +68,30 @@ issuepack scan ./diagnostics --json
 issuepack bundle ./diagnostics --out ./issuepack-output --json
 ```
 
+`scan --json` contains local relative paths and is intended for local automation. Do not publish scan output without reviewing those paths.
+
 The bundle contains:
 
 ```text
 issuepack-output/
 |-- files/          Sanitized UTF-8 text files
-|-- manifest.json   Counts, file list, limits, and skipped entries
+|-- manifest.json   Schema v2 counts, path policy, limits, and skipped entries
 `-- REPORT.md       Human-readable review checklist
 ```
 
-Binary files, symbolic links, files larger than 5 MiB, and common generated directories are skipped. Absolute input paths are not written to the manifest.
+Binary files, symbolic links, files larger than 5 MiB, and common generated directories are skipped. A run processes at most 5,000 files and 100 MiB. Absolute input paths are never written to the manifest.
+
+Bundle output is staged before it is moved into the requested destination. If an interrupted run leaves `.issuepack-incomplete`, delete that output directory and run the command again.
 
 ## Detected Data
 
-IssuePack currently detects common API credentials, authorization and cookie headers, private keys, JWTs, credential assignments, authenticated URLs, email addresses, home-directory usernames, IPv4 addresses, and MAC addresses.
+IssuePack currently detects:
+
+- OpenAI, Anthropic, GitHub, GitLab, AWS, Google, Slack, Hugging Face, npm, and SendGrid credentials
+- Authorization, cookie, and generic credential assignments
+- Private keys, JWTs, and authenticated URLs
+- Email addresses and home-directory usernames
+- IPv4 and MAC addresses
 
 Detection is intentionally conservative, but no regex-based tool can guarantee complete redaction. Custom identifiers, secrets split across lines, encoded payloads, images, archives, and proprietary credential formats may not be detected.
 
@@ -78,10 +101,28 @@ Detection is intentionally conservative, but no regex-based tool can guarantee c
 - Existing output directories are never overwritten.
 - Symbolic links are not followed.
 - Processing is local; IssuePack performs no network requests.
-- Placeholders use a random per-bundle salt, so values remain correlatable inside a bundle without creating a stable identifier across bundles.
+- Placeholders use a random per-bundle HMAC key, so values remain correlatable inside a bundle without creating a stable identifier across bundles.
+- Known sensitive filename patterns are redacted in written, skipped, and manifest paths.
+- `--anonymize-paths` hides every input path segment when names themselves are confidential.
 - Generated bundles must be reviewed manually before upload or publication.
 
 See [SECURITY.md](SECURITY.md) for reporting vulnerabilities and handling missed redactions.
+
+The detailed trust boundaries and unsupported data classes are documented in [docs/threat-model.md](docs/threat-model.md). The generated manifest contract is documented in [docs/manifest-v2.md](docs/manifest-v2.md).
+
+## Library API
+
+```js
+import { createBundle, scanPath } from "issuepack-cli";
+
+const scan = await scanPath("./diagnostics");
+const bundle = await createBundle("./diagnostics", {
+  outputDir: "./issuepack-output",
+  anonymizePaths: true,
+});
+```
+
+The JavaScript API follows the same read-only input and no-overwrite guarantees as the CLI.
 
 ## Development
 
@@ -94,10 +135,10 @@ The project uses TypeScript and Node's built-in test runner. Runtime code depend
 
 ## Roadmap
 
-- Configurable collectors for common runtimes
-- Archive output after the directory format stabilizes
-- Optional screenshot metadata and OCR-assisted review
-- Optional maintainer-side issue summaries from already-sanitized bundles
+- Configurable include and exclude rules
+- Framework-specific diagnostic collectors
+- Archive output with integrity checks
+- A documented redaction-rule plugin interface
 
 ## License
 

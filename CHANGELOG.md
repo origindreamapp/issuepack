@@ -4,6 +4,20 @@ All notable changes to IssuePack will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Optional full path anonymization with `--anonymize-paths`.
+- Detection for Anthropic, GitLab, Hugging Face, npm, and SendGrid tokens.
+- Per-file findings in human-readable scan output.
+- File-count and total-byte processing limits.
+
+### Changed
+
+- Bundle creation now stages output and cleans up handled failures.
+- Known sensitive patterns in input names, file paths, and skipped paths are redacted.
+- Bundle manifests use schema version 2 and report path handling separately.
+- Redaction fingerprints use 12-character salted HMAC digests.
+
 ## [0.1.0] - 2026-08-17
 
 ### Added

@@ -9,9 +9,11 @@ IssuePack creates sanitized copies of diagnostic text. Keep the runtime dependen
 - Never modify, delete, or overwrite an input file.
 - Never follow symbolic links while collecting a bundle.
 - Never include absolute source paths in generated reports or manifests.
+- Never include known sensitive values from written or skipped path names.
 - Never use real credentials, private logs, or personal data in tests or documentation.
 - Treat redaction as best-effort and keep the manual-review warning visible.
 - Keep fingerprints salted per bundle so low-entropy values are not stable across runs.
+- Keep handled failures from leaving a shareable-looking partial bundle.
 
 ## Verification
 

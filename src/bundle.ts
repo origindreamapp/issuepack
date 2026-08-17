@@ -4,14 +4,16 @@ import {
   access,
   lstat,
   mkdir,
-  readFile,
+  open,
   readdir,
-  stat,
+  rename,
+  rm,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import {
   countFindings,
+  fingerprintValue,
   mergeCounts,
   redactText,
   type RedactionCounts,
@@ -19,7 +21,10 @@ import {
 import { NAME, VERSION } from "./version.js";
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_FILE_COUNT = 5_000;
+const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 const IGNORED_DIRECTORIES = new Set([".git", "node_modules", "dist", "coverage"]);
+const INCOMPLETE_MARKER = ".issuepack-incomplete";
 
 export interface SkippedEntry {
   path: string;
@@ -31,6 +36,7 @@ export interface FileReport {
   bytesIn: number;
   bytesOut: number;
   redactions: RedactionCounts;
+  pathRedactions: RedactionCounts;
 }
 
 export interface ScanReport {
@@ -43,7 +49,7 @@ export interface ScanReport {
 }
 
 export interface BundleManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   generatedAt: string;
   tool: {
     name: string;
@@ -55,12 +61,19 @@ export interface BundleManifest {
   };
   limits: {
     maxFileBytes: number;
+    maxFiles: number;
+    maxTotalBytes: number;
+  };
+  pathPolicy: {
+    mode: "anonymize" | "redact-known";
+    warning: string;
   };
   totals: {
     filesWritten: number;
     bytesIn: number;
     bytesOut: number;
     redactions: RedactionCounts;
+    pathRedactions: RedactionCounts;
   };
   files: FileReport[];
   skipped: SkippedEntry[];
@@ -70,6 +83,11 @@ export interface BundleManifest {
 export interface BundleResult {
   outputPath: string;
   manifest: BundleManifest;
+}
+
+export interface BundleOptions {
+  outputDir?: string;
+  anonymizePaths?: boolean;
 }
 
 interface CollectedPath {
@@ -97,9 +115,14 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 async function collectInput(inputPath: string): Promise<CollectionResult> {
-  const inputStats = await stat(inputPath);
+  const inputStats = await lstat(inputPath);
   const paths: CollectedPath[] = [];
   const skipped: SkippedEntry[] = [];
+  let collectionTruncated = false;
+
+  if (inputStats.isSymbolicLink()) {
+    throw new Error("Input cannot be a symbolic link.");
+  }
 
   if (inputStats.isFile()) {
     paths.push({
@@ -114,10 +137,21 @@ async function collectInput(inputPath: string): Promise<CollectionResult> {
   }
 
   async function walk(directory: string): Promise<void> {
+    if (collectionTruncated) {
+      return;
+    }
     const entries = await readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
 
     for (const entry of entries) {
+      if (paths.length >= MAX_FILE_COUNT) {
+        skipped.push({
+          path: portablePath(relative(inputPath, directory)),
+          reason: `file limit of ${MAX_FILE_COUNT} reached; remaining entries omitted`,
+        });
+        collectionTruncated = true;
+        return;
+      }
       const absolutePath = join(directory, entry.name);
       const relativePath = portablePath(relative(inputPath, absolutePath));
 
@@ -132,6 +166,9 @@ async function collectInput(inputPath: string): Promise<CollectionResult> {
           continue;
         }
         await walk(absolutePath);
+        if (collectionTruncated) {
+          return;
+        }
         continue;
       }
 
@@ -143,6 +180,80 @@ async function collectInput(inputPath: string): Promise<CollectionResult> {
 
   await walk(inputPath);
   return { paths, skipped, inputType: "directory" };
+}
+
+function portableSegment(value: string): string {
+  const sanitized = value
+    .replace(/[<>:"`\\|?*\u0000-\u001f]/g, "_")
+    .replace(/[. ]+$/g, "_");
+  return sanitized || "unnamed";
+}
+
+function protectedPlaceholder(value: string): string {
+  return value.replace(
+    /\[REDACTED:([A-Z_]+):([a-f0-9]{12})\]/g,
+    (_match, kind: string, digest: string) =>
+      `redacted-${kind.toLowerCase().replaceAll("_", "-")}-${digest}`,
+  );
+}
+
+function safeExtension(segment: string): string {
+  const extension = extname(segment);
+  return /^\.[A-Za-z0-9]{1,12}$/.test(extension) ? extension : "";
+}
+
+function protectRelativePath(
+  value: string,
+  salt: string,
+  anonymizePaths: boolean,
+  finalSegmentIsFile: boolean,
+): { path: string; redactions: RedactionCounts } {
+  const trailingSlash = value.endsWith("/");
+  const rawSegments = value.replace(/\/$/, "").split("/").filter(Boolean);
+  let redactions: RedactionCounts = {};
+  const protectedSegments = rawSegments.map((segment, index) => {
+    const isLast = index === rawSegments.length - 1;
+    if (anonymizePaths) {
+      const isFile = isLast && finalSegmentIsFile;
+      const extension = isFile ? safeExtension(segment) : "";
+      const prefix = isFile ? "file" : "dir";
+      return `${prefix}-${fingerprintValue(segment, salt)}${extension}`;
+    }
+
+    const isFile = isLast && finalSegmentIsFile;
+    const extension = isFile ? safeExtension(segment) : "";
+    const redactionTarget = extension
+      ? segment.slice(0, -extension.length)
+      : segment;
+    const result = redactText(redactionTarget, { fingerprintSalt: salt });
+    redactions = mergeCounts(redactions, countFindings(result.findings));
+    return `${portableSegment(protectedPlaceholder(result.text))}${extension}`;
+  });
+
+  const protectedPath = protectedSegments.join("/") || "input";
+  return {
+    path: trailingSlash ? `${protectedPath}/` : protectedPath,
+    redactions,
+  };
+}
+
+function uniqueProtectedPath(
+  protectedPath: string,
+  sourcePath: string,
+  salt: string,
+  seen: Set<string>,
+): string {
+  const collisionKey = protectedPath.toLowerCase();
+  if (!seen.has(collisionKey)) {
+    seen.add(collisionKey);
+    return protectedPath;
+  }
+
+  const extension = safeExtension(protectedPath);
+  const stem = extension ? protectedPath.slice(0, -extension.length) : protectedPath;
+  const candidate = `${stem}-${fingerprintValue(sourcePath, salt)}${extension}`;
+  seen.add(candidate.toLowerCase());
+  return candidate;
 }
 
 function decodeText(buffer: Buffer): string | undefined {
@@ -184,22 +295,55 @@ async function readTextEntry(
     };
   }
 
-  const buffer = await readFile(entry.absolutePath);
-  const text = decodeText(buffer);
-  if (text === undefined) {
-    return { skipped: { path: entry.relativePath, reason: "binary or non-UTF-8 file" } };
-  }
+  const noFollowFlag = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  let handle;
+  try {
+    handle = await open(entry.absolutePath, constants.O_RDONLY | noFollowFlag);
+    const openedStats = await handle.stat();
+    if (!openedStats.isFile()) {
+      return { skipped: { path: entry.relativePath, reason: "not a regular file" } };
+    }
+    if (openedStats.size !== fileStats.size || openedStats.size > MAX_FILE_BYTES) {
+      return { skipped: { path: entry.relativePath, reason: "file changed while reading" } };
+    }
 
-  return { text, bytes: buffer.length };
+    const buffer = await handle.readFile();
+    if (buffer.length !== openedStats.size) {
+      return { skipped: { path: entry.relativePath, reason: "file changed while reading" } };
+    }
+    const text = decodeText(buffer);
+    if (text === undefined) {
+      return {
+        skipped: { path: entry.relativePath, reason: "binary or non-UTF-8 file" },
+      };
+    }
+
+    return { text, bytes: buffer.length };
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ELOOP" || error.code === "EMLINK")
+    ) {
+      return { skipped: { path: entry.relativePath, reason: "symbolic link" } };
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
 }
 
 function buildReport(manifest: BundleManifest): string {
-  const redactionRows = Object.entries(manifest.totals.redactions)
+  const redactionRows = Object.entries(
+    mergeCounts(manifest.totals.redactions, manifest.totals.pathRedactions),
+  )
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([kind, count]) => `| ${kind} | ${count} |`);
 
   const skippedRows = manifest.skipped.length
-    ? manifest.skipped.map((entry) => `- \`${entry.path}\`: ${entry.reason}`)
+    ? manifest.skipped.map(
+        (entry) => `- \`${entry.path.replaceAll("`", "'")}\`: ${entry.reason}`,
+      )
     : ["- None"];
 
   return [
@@ -215,6 +359,8 @@ function buildReport(manifest: BundleManifest): string {
     `- Files written: ${manifest.totals.filesWritten}`,
     `- Files skipped: ${manifest.skipped.length}`,
     `- Bytes processed: ${manifest.totals.bytesIn}`,
+    `- Path mode: ${manifest.pathPolicy.mode}`,
+    `- Path redactions: ${Object.values(manifest.totals.pathRedactions).reduce((sum, count) => sum + (count ?? 0), 0)}`,
     "",
     "## Redactions",
     "",
@@ -227,6 +373,8 @@ function buildReport(manifest: BundleManifest): string {
     ...skippedRows,
     "",
     "## Before Sharing",
+    "",
+    manifest.pathPolicy.warning,
     "",
     "Open the files in this bundle and verify that no confidential or personal data remains.",
     "",
@@ -251,6 +399,13 @@ export async function scanPath(input: string): Promise<ScanReport> {
       skipped.push(readResult.skipped);
       continue;
     }
+    if (bytesScanned + readResult.bytes > MAX_TOTAL_BYTES) {
+      skipped.push({
+        path: entry.relativePath,
+        reason: `total byte limit of ${MAX_TOTAL_BYTES} reached`,
+      });
+      continue;
+    }
 
     const result = redactText(readResult.text);
     const counts = countFindings(result.findings);
@@ -271,7 +426,7 @@ export async function scanPath(input: string): Promise<ScanReport> {
 
 export async function createBundle(
   input: string,
-  options: { outputDir?: string } = {},
+  options: BundleOptions = {},
 ): Promise<BundleResult> {
   const inputPath = resolve(input);
   if (!(await pathExists(inputPath))) {
@@ -288,63 +443,157 @@ export async function createBundle(
   }
 
   const collection = await collectInput(inputPath);
+  const anonymizePaths = options.anonymizePaths ?? false;
   const files: FileReport[] = [];
-  const skipped = [...collection.skipped];
+  const skipped: SkippedEntry[] = [];
   const fingerprintSalt = randomBytes(32).toString("hex");
+  const seenProtectedPaths = new Set<string>();
   let totalRedactions: RedactionCounts = {};
+  let totalPathRedactions: RedactionCounts = {};
   let totalBytesIn = 0;
   let totalBytesOut = 0;
+  const inputName = protectRelativePath(
+    basename(inputPath),
+    fingerprintSalt,
+    anonymizePaths,
+    collection.inputType === "file",
+  );
+  totalPathRedactions = mergeCounts(totalPathRedactions, inputName.redactions);
 
-  await mkdir(join(outputPath, "files"), { recursive: true });
-
-  for (const entry of collection.paths) {
-    const readResult = await readTextEntry(entry);
-    if ("skipped" in readResult) {
-      skipped.push(readResult.skipped);
-      continue;
-    }
-
-    const result = redactText(readResult.text, { fingerprintSalt });
-    const counts = countFindings(result.findings);
-    const destination = join(outputPath, "files", entry.relativePath);
-    await mkdir(dirname(destination), { recursive: true });
-    await writeFile(destination, result.text, "utf8");
-
-    const bytesOut = Buffer.byteLength(result.text, "utf8");
-    totalBytesIn += readResult.bytes;
-    totalBytesOut += bytesOut;
-    totalRedactions = mergeCounts(totalRedactions, counts);
-    files.push({
-      path: entry.relativePath,
-      bytesIn: readResult.bytes,
-      bytesOut,
-      redactions: counts,
-    });
-  }
-
-  const manifest: BundleManifest = {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    tool: { name: NAME, version: VERSION },
-    input: { name: basename(inputPath), type: collection.inputType },
-    limits: { maxFileBytes: MAX_FILE_BYTES },
-    totals: {
-      filesWritten: files.length,
-      bytesIn: totalBytesIn,
-      bytesOut: totalBytesOut,
-      redactions: totalRedactions,
-    },
-    files,
-    skipped,
-    warning: "Redaction is best-effort. Review the bundle manually before sharing it.",
+  const addSkipped = (entry: SkippedEntry): void => {
+    const protectedEntry = protectRelativePath(
+      entry.path,
+      fingerprintSalt,
+      anonymizePaths,
+      !entry.path.endsWith("/"),
+    );
+    totalPathRedactions = mergeCounts(
+      totalPathRedactions,
+      protectedEntry.redactions,
+    );
+    skipped.push({ path: protectedEntry.path, reason: entry.reason });
   };
 
-  await writeFile(
-    join(outputPath, "manifest.json"),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    "utf8",
-  );
-  await writeFile(join(outputPath, "REPORT.md"), buildReport(manifest), "utf8");
+  for (const entry of collection.skipped) {
+    addSkipped(entry);
+  }
 
-  return { outputPath, manifest };
+  const outputParent = dirname(outputPath);
+  const tempPath = join(
+    outputParent,
+    `issuepack-tmp-${basename(outputPath)}-${randomBytes(6).toString("hex")}`,
+  );
+  let outputReserved = false;
+
+  await mkdir(outputParent, { recursive: true });
+  await mkdir(tempPath);
+
+  try {
+    await mkdir(join(tempPath, "files"));
+
+    for (const entry of collection.paths) {
+      const readResult = await readTextEntry(entry);
+      if ("skipped" in readResult) {
+        addSkipped(readResult.skipped);
+        continue;
+      }
+      if (totalBytesIn + readResult.bytes > MAX_TOTAL_BYTES) {
+        addSkipped({
+          path: entry.relativePath,
+          reason: `total byte limit of ${MAX_TOTAL_BYTES} reached`,
+        });
+        continue;
+      }
+
+      const result = redactText(readResult.text, { fingerprintSalt });
+      const counts = countFindings(result.findings);
+      const protectedEntry = protectRelativePath(
+        entry.relativePath,
+        fingerprintSalt,
+        anonymizePaths,
+        true,
+      );
+      const protectedPath = uniqueProtectedPath(
+        protectedEntry.path,
+        entry.relativePath,
+        fingerprintSalt,
+        seenProtectedPaths,
+      );
+      const destination = join(tempPath, "files", protectedPath);
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, result.text, "utf8");
+
+      const bytesOut = Buffer.byteLength(result.text, "utf8");
+      totalBytesIn += readResult.bytes;
+      totalBytesOut += bytesOut;
+      totalRedactions = mergeCounts(totalRedactions, counts);
+      totalPathRedactions = mergeCounts(
+        totalPathRedactions,
+        protectedEntry.redactions,
+      );
+      files.push({
+        path: portablePath(protectedPath),
+        bytesIn: readResult.bytes,
+        bytesOut,
+        redactions: counts,
+        pathRedactions: protectedEntry.redactions,
+      });
+    }
+
+    const manifest: BundleManifest = {
+      schemaVersion: 2,
+      generatedAt: new Date().toISOString(),
+      tool: { name: NAME, version: VERSION },
+      input: { name: inputName.path, type: collection.inputType },
+      limits: {
+        maxFileBytes: MAX_FILE_BYTES,
+        maxFiles: MAX_FILE_COUNT,
+        maxTotalBytes: MAX_TOTAL_BYTES,
+      },
+      pathPolicy: {
+        mode: anonymizePaths ? "anonymize" : "redact-known",
+        warning: anonymizePaths
+          ? "All input path segments were replaced with salted fingerprints."
+          : "Known sensitive patterns in path names were redacted, but custom names may remain sensitive. Review filenames before sharing.",
+      },
+      totals: {
+        filesWritten: files.length,
+        bytesIn: totalBytesIn,
+        bytesOut: totalBytesOut,
+        redactions: totalRedactions,
+        pathRedactions: totalPathRedactions,
+      },
+      files,
+      skipped,
+      warning: "Redaction is best-effort. Review the bundle manually before sharing it.",
+    };
+
+    await writeFile(
+      join(tempPath, "manifest.json"),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(join(tempPath, "REPORT.md"), buildReport(manifest), "utf8");
+
+    await mkdir(outputPath);
+    outputReserved = true;
+    await writeFile(
+      join(outputPath, INCOMPLETE_MARKER),
+      "IssuePack did not finish creating this bundle. Delete it and retry.\n",
+      "utf8",
+    );
+    await rename(join(tempPath, "files"), join(outputPath, "files"));
+    await rename(join(tempPath, "manifest.json"), join(outputPath, "manifest.json"));
+    await rename(join(tempPath, "REPORT.md"), join(outputPath, "REPORT.md"));
+    await rm(tempPath, { recursive: true, force: true });
+    await rm(join(outputPath, INCOMPLETE_MARKER), { force: true });
+
+    return { outputPath, manifest };
+  } catch (error) {
+    await rm(tempPath, { recursive: true, force: true });
+    if (outputReserved) {
+      await rm(outputPath, { recursive: true, force: true });
+    }
+    throw error;
+  }
 }

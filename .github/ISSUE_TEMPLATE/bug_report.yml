@@ -18,9 +18,16 @@ body:
     id: version
     attributes:
       label: IssuePack version
-      placeholder: 0.1.0
+      placeholder: 0.2.0
     validations:
       required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I used only synthetic data and removed private paths, logs, and credentials.
+          required: true
   - type: dropdown
     id: operating-system
     attributes:
