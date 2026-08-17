@@ -1,6 +1,7 @@
 # IssuePack
 
 [![CI](https://github.com/origindreamapp/issuepack/actions/workflows/ci.yml/badge.svg)](https://github.com/origindreamapp/issuepack/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/origindreamapp/issuepack/actions/workflows/codeql.yml/badge.svg)](https://github.com/origindreamapp/issuepack/actions/workflows/codeql.yml)
 [![Latest release](https://img.shields.io/github/v/release/origindreamapp/issuepack)](https://github.com/origindreamapp/issuepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
