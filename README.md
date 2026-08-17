@@ -79,7 +79,7 @@ issuepack-output/
 `-- REPORT.md       Human-readable review checklist
 ```
 
-Binary files, symbolic links, files larger than 5 MiB, and common generated directories are skipped. A run processes at most 5,000 files and 100 MiB. Absolute input paths are never written to the manifest.
+Binary files, symbolic links, files larger than 5 MiB, common generated directories, and nested IssuePack bundles are skipped. A directory is recognized as an IssuePack bundle only when it contains the generated v2 manifest, `REPORT.md`, and `files/` layout; passing that bundle as the direct input still scans it normally. A run processes at most 5,000 files and 100 MiB. Absolute input paths are never written to the manifest.
 
 Bundle output is staged before it is moved into the requested destination. If an interrupted run leaves `.issuepack-incomplete`, delete that output directory and run the command again.
 

@@ -114,6 +114,43 @@ test("scan reports findings and writes no files", async (context) => {
   assert.deepEqual(await readFile(input, "utf8"), "contact=person@example.com\n");
 });
 
+test("skips generated IssuePack bundles nested under the input", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "issuepack-nested-bundle-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const input = join(root, "diagnostics");
+  const nestedBundle = join(input, ".shared-bundle");
+  const secondBundle = join(root, "second-bundle");
+  const lookalike = join(input, "lookalike");
+  await mkdir(input);
+  await writeFile(join(input, "app.log"), "status=ok\n", "utf8");
+  await createBundle(input, { outputDir: nestedBundle });
+
+  await mkdir(join(lookalike, "files"), { recursive: true });
+  await writeFile(
+    join(lookalike, "manifest.json"),
+    '{"schemaVersion":2,"tool":{"name":"Other"}}\n',
+    "utf8",
+  );
+  await writeFile(join(lookalike, "REPORT.md"), "not IssuePack\n", "utf8");
+  await writeFile(join(lookalike, "files", "payload.log"), "clean\n", "utf8");
+
+  const report = await scanPath(input);
+  const second = await createBundle(input, { outputDir: secondBundle });
+  const direct = await scanPath(nestedBundle);
+
+  assert.equal(report.filesScanned, 4);
+  assert.equal(second.manifest.totals.filesWritten, 4);
+  assert.equal(direct.filesScanned, 3);
+  assert.ok(
+    report.skipped.some(
+      (entry) =>
+        entry.path === ".shared-bundle/" &&
+        entry.reason === "generated IssuePack bundle",
+    ),
+  );
+  assert.ok(report.files.some((entry) => entry.path === "lookalike/REPORT.md"));
+});
+
 test("refuses to overwrite an existing output directory", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "issuepack-existing-"));
   context.after(() => rm(root, { recursive: true, force: true }));

@@ -17,6 +17,7 @@ All notable changes to IssuePack will be documented here.
 - Known sensitive patterns in input names, file paths, and skipped paths are redacted.
 - Bundle manifests use schema version 2 and report path handling separately.
 - Redaction fingerprints use 12-character salted HMAC digests.
+- Nested generated IssuePack bundles are skipped so prior output does not pollute later scans or bundles.
 
 ## [0.1.0] - 2026-08-17
 
