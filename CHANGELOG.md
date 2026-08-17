@@ -4,6 +4,8 @@ All notable changes to IssuePack will be documented here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-17
+
 ### Added
 
 - Optional full path anonymization with `--anonymize-paths`.
