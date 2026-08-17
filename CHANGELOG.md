@@ -4,6 +4,10 @@ All notable changes to IssuePack will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Cross-platform package smoke testing for tarball creation, isolated installation, CLI execution, and sanitized bundle verification.
+
 ## [0.2.0] - 2026-08-17
 
 ### Added
