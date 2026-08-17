@@ -18,7 +18,7 @@ body:
     id: version
     attributes:
       label: IssuePack version
-      placeholder: 0.2.0
+      placeholder: 0.2.1
     validations:
       required: true
   - type: checkboxes

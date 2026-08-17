@@ -7,6 +7,9 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 const execFileAsync = promisify(execFile);
+const packageJson = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+);
 
 test("prints its version", async () => {
   const { stdout, stderr } = await execFileAsync(
@@ -15,7 +18,7 @@ test("prints its version", async () => {
     { cwd: process.cwd() },
   );
 
-  assert.equal(stdout.trim(), "0.2.0");
+  assert.equal(stdout.trim(), packageJson.version);
   assert.equal(stderr, "");
 });
 

@@ -4,6 +4,8 @@ All notable changes to IssuePack will be documented here.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-17
+
 ### Added
 
 - Cross-platform package smoke testing for tarball creation, isolated installation, CLI execution, and sanitized bundle verification.
@@ -12,6 +14,7 @@ All notable changes to IssuePack will be documented here.
 ### Fixed
 
 - Replaced the private-key block regular expression with a linear boundary scanner to prevent polynomial backtracking on hostile input.
+- Read CLI and manifest version metadata from `package.json` so releases cannot report a stale runtime version.
 
 ## [0.2.0] - 2026-08-17
 
